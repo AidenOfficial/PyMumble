@@ -139,3 +139,44 @@ async def test_played_audio_arrives_decodable() -> None:
                         break
         assert len(received) == 21  # 20 帧 + 终止帧
         assert rms(b"".join(received[5:15])) > 0.5 * rms(src)
+
+
+def test_threaded_client_streams_to_a_listener() -> None:
+    import threading
+
+    from pymumble_rev import ThreadedClient, opus
+
+    from .test_opus import rms, tone
+
+    assert SERVER is not None
+    host, _, port = SERVER.rpartition(":")
+
+    def threaded(name: str, **kwargs: Any) -> ThreadedClient:
+        return ThreadedClient(host, ClientConfig(username=name), port=int(port), **kwargs)
+
+    with (
+        threaded(unique("ear"), receive_audio=True) as ear,
+        threaded(unique("dj"), channels=2) as dj,
+    ):
+        buf, done = dj.open_stream(capacity=0.2)
+        src = tone(500, 2, amp=10_000)
+
+        def producer() -> None:
+            for i in range(0, len(src), 3840):
+                buf.write(src[i : i + 3840])
+            buf.close()
+
+        t = threading.Thread(target=producer)
+        t.start()
+
+        dec = opus.Decoder(2)  # 立体声包;Mumble 服务器原样转发
+        frames: list[bytes] = []
+        for event in ear.events():
+            if isinstance(event, events.AudioReceived):
+                frames.append(dec.decode(event.opus_data))
+                if event.is_terminator:
+                    break
+        done.result(timeout=5)
+        t.join(5)
+        assert len(frames) == 26  # 25 帧 + 终止帧
+        assert rms(b"".join(frames[5:20])) > 0.5 * rms(src)

@@ -14,6 +14,12 @@ Asyncio Mumble client library. Distribution name `pymumble-rev`, import name `py
   absolute deadlines, and resyncs instead of bursting after a stall. `AudioSource.read()` must never
   block (it runs on the loop); threads feed audio through `PcmBuffer`. libopus is bound with ctypes
   in `opus.py` and loaded lazily on the first `play()`, so text-only users never need it.
+- `ThreadedClient` (`sync.py`) owns a private loop thread. Blocking methods go through `_call`
+  (refuses to run on the loop thread). `play()` performs the switch on the loop before returning so
+  later calls are ordered after it.
+- ctypes calls into variadic C functions (`opus_encoder_ctl`) have no argtypes: wrap pointers in
+  `c_void_p` explicitly, or they are truncated to 32 bits (works on the main thread's low heap, breaks
+  in threads).
 - State is immutable: `User`, `Channel`, `ServerInfo`, `ServerState` are frozen dataclasses. `Connection`
   mutates private dicts while handling one `receive_data` batch and publishes one new `ServerState` at the
   end (only when `_dirty`). Never hand out the private dicts.

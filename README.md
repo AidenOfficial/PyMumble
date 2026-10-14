@@ -4,8 +4,8 @@
 
 [简体中文](README.zh-CN.md)
 
-> **Status: pre-alpha.** Protocol core, asyncio client and the audio pipeline are in place; a
-> blocking wrapper for threaded applications is next. The API will change until 0.1.0.
+> **Status: pre-alpha.** Protocol core, asyncio client, audio pipeline and a blocking wrapper for
+> threaded applications are in place. The API will change until 0.1.0.
 
 An asyncio client for the Mumble voice protocol, designed for long-running bots that stream audio.
 
@@ -97,6 +97,37 @@ async def main() -> None:
   counting the TCP tunnel overhead the server charges per packet.
 - libopus is loaded on the first `play()`; set `PYMUMBLE_REV_LIBOPUS` to point at a specific
   library file.
+
+## From threaded code
+
+`ThreadedClient` runs the asyncio client on a private loop thread and exposes the same API as
+blocking calls, for applications that are built on threads:
+
+```python
+import threading
+from pymumble_rev import ClientConfig, ThreadedClient, events
+
+with ThreadedClient("mumble.example.org", ClientConfig(username="dj"), channels=2) as client:
+    buf, done = client.open_stream(capacity=0.5)   # a PcmBuffer that is already playing
+
+    def player() -> None:                          # e.g. your existing ffmpeg reader thread
+        for chunk in pcm_chunks():
+            buf.write(chunk)                       # blocks while 0.5 s is queued
+        buf.close()
+
+    threading.Thread(target=player, daemon=True).start()
+
+    for event in client.events():                  # blocks; ends when the connection ends
+        if isinstance(event, events.TextMessage) and event.message == "!skip":
+            buf.clear()
+```
+
+- Commands (`send_text`, `move`, ...) block until written and raise `TimeoutError` after
+  `command_timeout` (10 s). Calling them from the loop thread raises instead of deadlocking.
+- `play()` returns once the switch has happened, so a following `stop_audio()` or `volume`
+  change always applies to the new source. Its `concurrent.futures.Future` completes when the
+  source ends.
+- `state` is an immutable snapshot and can be read from any thread without locking.
 
 ## The sans-IO core
 

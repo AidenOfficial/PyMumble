@@ -191,3 +191,13 @@ def test_playback_future_fails_on_disconnect() -> None:
         st.call(st.server.drop())
         with pytest.raises(ConnectionClosedError):
             done.result(timeout=5)
+
+
+def test_tokens_and_receive_audio_toggle() -> None:
+    with fake_server() as st, client_for(st) as client:
+        client.set_tokens(["vip"])
+        wait_until(lambda: len(st.received(pb.Authenticate)) == 2)
+        assert list(st.received(pb.Authenticate)[-1].tokens) == ["vip"]
+        assert client.receive_audio is False
+        client.receive_audio = True
+        assert client.receive_audio is True

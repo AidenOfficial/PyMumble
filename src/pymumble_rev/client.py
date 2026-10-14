@@ -240,6 +240,10 @@ class MumbleClient:
         self._conn.request_blob(comments=comments, textures=textures, descriptions=descriptions)
         await self._flush()
 
+    async def set_tokens(self, tokens: Iterable[str]) -> None:
+        self._conn.set_tokens(tokens)
+        await self._flush()
+
     async def send_audio(
         self, opus_data: bytes, *, frame_number: int, target: int = 0, is_terminator: bool = False
     ) -> None:

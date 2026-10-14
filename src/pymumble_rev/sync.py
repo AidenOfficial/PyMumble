@@ -246,6 +246,10 @@ class ThreadedClient:
             )
         )
 
+    def set_tokens(self, tokens: Iterable[str]) -> None:
+        """Replace the channel access tokens (see :meth:`Connection.set_tokens`)."""
+        self._command(self._client.set_tokens(list(tokens)))
+
     # —— 音频 ——————————————————————————————————————————————————————————
 
     def play(self, source: AudioSource) -> concurrent.futures.Future[None]:
@@ -296,6 +300,16 @@ class ThreadedClient:
             self._client.volume = value
 
         self._require_loop().call_soon_threadsafe(apply)
+
+    @property
+    def receive_audio(self) -> bool:
+        """Whether :class:`events.AudioReceived` is delivered (toggle at any time)."""
+        return self._client.receive_audio
+
+    @receive_audio.setter
+    def receive_audio(self, value: bool) -> None:
+        # 只是一个 bool 赋值,读写都是原子的,不必跳到循环线程
+        self._client.receive_audio = bool(value)
 
     @property
     def audio(self) -> AudioSender | None:

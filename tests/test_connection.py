@@ -403,3 +403,15 @@ def test_corrupt_stream_raises() -> None:
     conn, _ = connected()
     with pytest.raises(ProtocolError):
         conn.receive_data(HEADER.pack(TcpType.UserState, 0xFFFFFFFF))
+
+
+def test_set_tokens_sends_token_only_authenticate() -> None:
+    conn, _ = connected()
+    conn.set_tokens(["vip", "music"])
+    (msg,) = decode_sent(conn.data_to_send())
+    assert isinstance(msg, pb.Authenticate)
+    assert list(msg.tokens) == ["vip", "music"]
+    assert not msg.HasField("username")
+    assert not msg.HasField("password")
+    with pytest.raises(TypeError):
+        conn.set_tokens([b"bytes"])  # type: ignore[list-item]

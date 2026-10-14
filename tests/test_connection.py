@@ -5,6 +5,7 @@ import pytest
 from pymumble_rev import (
     ClientConfig,
     Connection,
+    ConnectionClosedError,
     LocalProtocolError,
     Phase,
     ProtocolError,
@@ -113,6 +114,17 @@ def test_eof_closes() -> None:
     assert conn.phase is Phase.CLOSED
     with pytest.raises(LocalProtocolError):
         conn.send_text("hi", channel_ids=[0])
+
+
+def test_local_close_is_idempotent_and_blocks_commands() -> None:
+    conn, _ = connected()
+    conn.close("transport failed")
+    conn.close("again")
+    assert conn.phase is Phase.CLOSED
+    assert conn.close_reason == "transport failed"
+    with pytest.raises(ConnectionClosedError, match="transport failed"):
+        conn.move(1)
+    assert conn.receive_data(frame(pb.TextMessage(message="late", channel_id=[0]))) == []
 
 
 # —— 状态与事件 ——————————————————————————————————————————————————————————

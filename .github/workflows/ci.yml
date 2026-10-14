@@ -43,3 +43,35 @@ jobs:
       - run: uv run --no-sync python scripts/gen_proto.py
       - name: Generated code matches proto/
         run: git diff --exit-code src/pymumble_rev/_proto
+
+  integration:
+    # 对着真实的 mumble-server(Ubuntu 仓库版本)跑 tests/test_integration.py
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      # 安装包会顺带启动一个监听 64738 的系统服务;测试实例用另一个端口,避开它
+      - run: sudo apt-get update && sudo apt-get install -y mumble-server
+      - name: Start mumble-server
+        run: |
+          dir="$RUNNER_TEMP/murmur"
+          mkdir -p "$dir"
+          cat > "$dir/murmur.ini" <<INI
+          database=$dir/murmur.sqlite
+          host=127.0.0.1
+          port=64799
+          autobanAttempts=0
+          INI
+          mumble-server -ini "$dir/murmur.ini" -fg > "$dir/server.log" 2>&1 &
+          for i in $(seq 1 30); do
+            nc -z 127.0.0.1 64799 && exit 0
+            sleep 1
+          done
+          cat "$dir/server.log"
+          exit 1
+      - run: uv sync --group dev --python 3.12
+      - run: uv run --no-sync pytest tests/test_integration.py -v
+        env:
+          PYMUMBLE_REV_SERVER: 127.0.0.1:64799
+      - if: failure()
+        run: cat "$RUNNER_TEMP/murmur/server.log"

@@ -180,3 +180,14 @@ def test_threaded_client_streams_to_a_listener() -> None:
         t.join(5)
         assert len(frames) == 26  # 25 帧 + 终止帧
         assert rms(b"".join(frames[5:20])) > 0.5 * rms(src)
+
+
+@run
+async def test_token_update_keeps_the_session() -> None:
+    async with make_client(unique("tok")) as client:
+        await next_event(client, events.Connected)
+        await client.set_tokens(["some-token"])
+        # 服务器把只带 tokens 的 Authenticate 当作令牌更新:连接保持,命令照常可用
+        await client.send_text("still here", channel_ids=[0])
+        await asyncio.sleep(0.3)
+        assert client.connected

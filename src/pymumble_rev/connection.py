@@ -235,6 +235,17 @@ class Connection:
             )
         )
 
+    def set_tokens(self, tokens: Iterable[str]) -> None:
+        """Replace the channel access tokens for this session (like the official client's
+        "Access Tokens" dialog). The server re-evaluates channel permissions immediately.
+        """
+        self._require(Phase.CONNECTED)
+        tokens = list(tokens)
+        if any(not isinstance(t, str) for t in tokens):
+            raise TypeError("tokens must be strings")
+        # 只带 tokens 的 Authenticate:服务器把它当作令牌更新,不是重新登录
+        self._send(pb.Authenticate(tokens=tokens))
+
     def send_audio(
         self,
         opus_data: bytes,

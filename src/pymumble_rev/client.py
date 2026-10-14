@@ -7,11 +7,13 @@ import logging
 import ssl
 from collections.abc import AsyncIterator, Coroutine, Iterable
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, NamedTuple, Self
 
 from . import events as ev
+from .audio import AudioSender, AudioSource
 from .connection import ClientConfig, Connection, Phase
 from .errors import ConnectionClosedError, ConnectionRejected, MumbleError
+from .opus import Application
 from .state import ServerState
 
 log = logging.getLogger(__name__)
@@ -35,6 +37,13 @@ def default_ssl_context(certfile: str | None = None, keyfile: str | None = None)
     if certfile:
         ctx.load_cert_chain(certfile, keyfile)
     return ctx
+
+
+class _AudioSettings(NamedTuple):
+    channels: int
+    frame_ms: int
+    bitrate: int
+    application: Application
 
 
 class MumbleClient:
@@ -66,6 +75,10 @@ class MumbleClient:
         dead_after: float = 20.0,
         receive_audio: bool = False,
         max_queued_events: int = 4096,
+        channels: int = 1,
+        frame_ms: int = 20,
+        bitrate: int = 96_000,
+        opus_application: Application = Application.AUDIO,
     ) -> None:
         """
         :param connect_timeout: Seconds allowed for TCP, TLS and the server's initial sync.
@@ -75,6 +88,9 @@ class MumbleClient:
             bot that does not listen would only queue packets it never reads.
         :param max_queued_events: Oldest events are dropped (with a warning) past this many
             unread events, so a consumer that stops reading cannot grow memory without bound.
+        :param channels: 1 or 2; the PCM that sources return must match.
+        :param frame_ms: Audio per packet (10, 20, 40 or 60 ms).
+        :param bitrate: Opus bitrate; capped automatically to the server's bandwidth limit.
         """
         self.host = host
         self.port = port
@@ -99,6 +115,9 @@ class MumbleClient:
         self._last_rx = 0.0
         #: Most recent ping round-trip time in seconds.
         self.rtt: float | None = None
+        self._audio_settings = _AudioSettings(channels, frame_ms, bitrate, opus_application)
+        self._audio: AudioSender | None = None
+        self._volume = 1.0
 
     # —— 生命周期 ——————————————————————————————————————————————————————
 
@@ -229,6 +248,55 @@ class MumbleClient:
         )
         await self._flush()
 
+    # —— 音频 ——————————————————————————————————————————————————————————
+
+    def play(self, source: AudioSource) -> asyncio.Future[None]:
+        """Start pulling audio from ``source`` now, replacing whatever was playing.
+
+        The returned future resolves when the source ends, is replaced, or is stopped, and
+        fails with :class:`ConnectionClosedError` if the connection drops first. The first call
+        loads libopus.
+        """
+        if not self.connected:
+            raise ConnectionClosedError(f"not connected ({self._conn.close_reason})")
+        if self._audio is None:
+            settings = self._audio_settings
+            self._audio = AudioSender(
+                self._send_audio_packet,
+                channels=settings.channels,
+                frame_ms=settings.frame_ms,
+                bitrate=settings.bitrate,
+                application=settings.application,
+            )
+            self._audio.volume = self._volume
+            self._audio.limit_bandwidth(self.state.server.max_bandwidth)
+            self._spawn(self._audio.run(), "audio")
+        return self._audio.play(source)
+
+    def stop_audio(self) -> None:
+        """Stop the current source and end the transmission."""
+        if self._audio is not None:
+            self._audio.stop()
+
+    @property
+    def volume(self) -> float:
+        """Gain applied to outgoing PCM (1.0 = unchanged). Changes take effect within a frame."""
+        return self._volume
+
+    @volume.setter
+    def volume(self, value: float) -> None:
+        self._volume = max(0.0, float(value))
+        if self._audio is not None:
+            self._audio.volume = self._volume
+
+    @property
+    def audio(self) -> AudioSender | None:
+        """The audio sender, once :meth:`play` has been called (bitrate, stats, ...)."""
+        return self._audio
+
+    async def _send_audio_packet(self, packet: bytes, frame_number: int, terminator: bool) -> None:
+        await self.send_audio(packet, frame_number=frame_number, is_terminator=terminator)
+
     # —— 内部 ——————————————————————————————————————————————————————————
 
     def _spawn(self, coro: Coroutine[Any, Any, None], name: str) -> None:
@@ -294,6 +362,8 @@ class MumbleClient:
                     self._connected.set_exception(ConnectionRejected(kind, reason))
             case ev.Pong(sent_at=sent_at):
                 self.rtt = max(0.0, now - sent_at)
+            case ev.ServerInfoUpdated(server=server) if self._audio is not None:
+                self._audio.limit_bandwidth(server.max_bandwidth)
             case ev.AudioReceived() if not self.receive_audio:
                 return
         self._emit(event)

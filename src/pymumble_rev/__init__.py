@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 from . import events
+from .client import MumbleClient, default_ssl_context
 from .connection import PROTOCOL_VERSION, ClientConfig, Connection, Phase
-from .errors import LocalProtocolError, MumbleError, ProtocolError
+from .errors import (
+    ConnectionClosedError,
+    ConnectionRejected,
+    LocalProtocolError,
+    MumbleError,
+    ProtocolError,
+)
 from .state import Channel, ServerInfo, ServerState, User
 
 __all__ = [
@@ -12,12 +19,16 @@ __all__ = [
     "Channel",
     "ClientConfig",
     "Connection",
+    "ConnectionClosedError",
+    "ConnectionRejected",
     "LocalProtocolError",
+    "MumbleClient",
     "MumbleError",
     "Phase",
     "ProtocolError",
     "ServerInfo",
     "ServerState",
     "User",
+    "default_ssl_context",
     "events",
 ]

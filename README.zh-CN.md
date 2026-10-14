@@ -4,7 +4,7 @@
 
 [English](README.md)
 
-> **状态:pre-alpha。** sans-IO 协议核心已完成;asyncio 客户端和音频管线是下一步。0.1.0 之前 API 会变。
+> **状态:pre-alpha。** sans-IO 协议核心和 asyncio 客户端已完成;音频管线是下一步。0.1.0 之前 API 会变。
 
 - **sans-IO 核心**:协议是纯状态机(`字节进 → 事件出`、`命令 → 字节出`),不用 socket 就能测试。
 - **拉模式音频**(计划中):客户端每 20 ms 向你的音源要下一帧,不用轮询缓冲区,切歌立即生效。
@@ -18,7 +18,7 @@
 pip install "pymumble-rev @ git+https://github.com/AidenOfficial/PyMumble@main"
 ```
 
-用法示例见 [英文 README](README.md#using-the-sans-io-core)。
+用法示例见 [英文 README](README.md#quick-start)。
 
 ## 为什么不用 pymumble?
 

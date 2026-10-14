@@ -4,8 +4,8 @@
 
 [简体中文](README.zh-CN.md)
 
-> **Status: pre-alpha.** The sans-IO protocol core is in place; the asyncio client and the audio
-> pipeline are next. The API will change until 0.1.0.
+> **Status: pre-alpha.** The sans-IO protocol core and the asyncio client are in place; the audio
+> pipeline is next. The API will change until 0.1.0.
 
 An asyncio client for the Mumble voice protocol, designed for long-running bots that stream audio.
 
@@ -21,38 +21,49 @@ Requires Python 3.12+.
 pip install "pymumble-rev @ git+https://github.com/AidenOfficial/PyMumble@main"
 ```
 
-## Using the sans-IO core
-
-`Connection` never touches a socket. You feed it the bytes you read and send the bytes it gives
-you; it tells you what happened as typed events and keeps the server state (users, channels) as
-immutable snapshots that are safe to read from any thread.
+## Quick start
 
 ```python
-import socket, ssl, time
-from pymumble_rev import ClientConfig, Connection, events
+import asyncio
+from pymumble_rev import ClientConfig, MumbleClient, events
 
-conn = Connection(ClientConfig(username="dj-bot", client_type="bot"))
-conn.initiate()  # queues Version + Authenticate
 
-ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE  # Mumble servers usually use self-signed certificates
-sock = ctx.wrap_socket(socket.create_connection(("mumble.example.org", 64738)))
+async def main() -> None:
+    config = ClientConfig(username="dj-bot", client_type="bot")
+    async with MumbleClient("mumble.example.org", config) as client:
+        me = client.state.myself
+        await client.send_text(f"hello from {me.name}", channel_ids=[me.channel_id])
 
-sock.sendall(conn.data_to_send())
-while True:
-    for event in conn.receive_data(sock.recv(65536)):
-        match event:
-            case events.Connected():
-                me = conn.state.myself
-                conn.send_text(f"hello from {me.name}", channel_ids=[me.channel_id])
-            case events.TextMessage(actor=actor, message=text):
-                print(conn.state.users[actor].name, text)
-            case events.ConnectionClosed():
-                raise SystemExit
-    conn.ping(time.monotonic())  # call every few seconds in a real client
-    sock.sendall(conn.data_to_send())
+        async for event in client.events():
+            match event:
+                case events.TextMessage(actor=int(actor), message="!ping"):
+                    await client.send_text("pong", sessions=[actor])
+                case events.UserUpdated(user=user, changed=changed) if "channel_id" in changed:
+                    print(f"{user.name} moved to {client.state.channels[user.channel_id].name}")
+        print("disconnected:", client.close_reason)
+
+
+asyncio.run(main())
 ```
+
+- `client.state` is an immutable snapshot (users, channels, server limits); reading it from another
+  thread is safe.
+- `events()` ends when the connection does. The client never reconnects by itself: put
+  `async with MumbleClient(...)` in your own retry loop, and each attempt starts from a fresh,
+  fully synced state.
+- Commands are coroutines that wait for the socket to drain, so a slow link slows the sender down
+  instead of being mistaken for a disconnect. A server that stops answering pings for
+  `dead_after` seconds (default 20) is treated as gone.
+- The server certificate is not verified by default, because nearly every Mumble server uses a
+  self-signed one. Pass `ssl_context=` to verify it, or
+  `default_ssl_context(certfile, keyfile)` to log in with a client certificate.
+
+## The sans-IO core
+
+`Connection` is the protocol without any I/O: feed it the bytes you read with `receive_data()`,
+write what `data_to_send()` returns, and pass time in explicitly (`ping(now)`). `MumbleClient`
+is a thin asyncio driver around it; use `Connection` directly to run the protocol on another
+event loop, in a thread, or in tests.
 
 ## Why not pymumble?
 

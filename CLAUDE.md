@@ -6,7 +6,10 @@ Asyncio Mumble client library. Distribution name `pymumble-rev`, import name `py
 
 - `connection.py` is **sans-IO**: no sockets, no clocks, no threads, no asyncio. Callers pass time in
   (`ping(now)`), feed bytes in (`receive_data`), and take bytes out (`data_to_send`). Keep it that way;
-  the asyncio transport (planned `client.py`) and audio pacing live outside it.
+  the asyncio transport (`client.py`) and audio pacing live outside it.
+- `MumbleClient` owns exactly one connection and never reconnects; reconnecting is the caller's loop.
+  Every write goes through `_flush()` (write + `drain()`), so backpressure suspends the sender rather
+  than failing. Liveness is "any byte received within `dead_after`", fed by the ping task.
 - State is immutable: `User`, `Channel`, `ServerInfo`, `ServerState` are frozen dataclasses. `Connection`
   mutates private dicts while handling one `receive_data` batch and publishes one new `ServerState` at the
   end (only when `_dirty`). Never hand out the private dicts.

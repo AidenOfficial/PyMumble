@@ -13,7 +13,7 @@ from typing import Any, Literal
 from google.protobuf.message import DecodeError, Message
 
 from . import events as ev
-from .errors import LocalProtocolError
+from .errors import ConnectionClosedError, LocalProtocolError
 from .framing import FrameDecoder, encode_frame
 from .messages import TCP_CLASSES, TcpType, UdpType, pb, tcp_type_of, udp_pb
 from .state import (
@@ -258,10 +258,17 @@ class Connection:
         packet = bytes([UdpType.Audio]) + audio.SerializeToString()
         self._outbound += encode_frame(TcpType.UDPTunnel, packet)
 
+    def close(self, reason: str = "closed locally") -> None:
+        """Mark the connection closed, e.g. because the transport failed. Idempotent."""
+        if self.phase is not Phase.CLOSED:
+            self._close(reason)
+
     # —— 内部 ——————————————————————————————————————————————————————————
 
     def _require(self, *phases: Phase) -> None:
         if self.phase not in phases:
+            if self.phase is Phase.CLOSED:
+                raise ConnectionClosedError(f"connection closed ({self.close_reason})")
             allowed = "/".join(p.value for p in phases)
             raise LocalProtocolError(f"not allowed in phase {self.phase.value} (needs {allowed})")
 

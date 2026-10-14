@@ -67,3 +67,23 @@ def test_closed_encoder_raises() -> None:
     enc.close()
     with pytest.raises(ValueError):
         enc.encode(tone(20, 1))
+
+
+def test_encoder_works_off_the_main_thread() -> None:
+    # 回归:opus_encoder_ctl 是可变参数函数,句柄曾被 ctypes 截成 32 位 int。
+    # 主线程的堆在低地址时碰巧没事,线程的 malloc arena 在高地址就会挂死或崩溃。
+    import threading
+
+    results: list[int] = []
+
+    def work() -> None:
+        enc = opus.Encoder(2)
+        enc.bitrate = 64_000
+        enc.reset()
+        results.append(len(enc.encode(tone(20, 2))))
+
+    t = threading.Thread(target=work, daemon=True)
+    t.start()
+    t.join(5)
+    assert not t.is_alive(), "encoder call hung off the main thread"
+    assert results and results[0] > 0

@@ -13,6 +13,7 @@ from .errors import (
     ProtocolError,
 )
 from .state import Channel, ServerInfo, ServerState, User
+from .sync import ThreadedClient
 
 __all__ = [
     "PROTOCOL_VERSION",
@@ -28,6 +29,7 @@ __all__ = [
     "ProtocolError",
     "ServerInfo",
     "ServerState",
+    "ThreadedClient",
     "User",
     "default_ssl_context",
     "events",

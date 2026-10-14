@@ -290,6 +290,11 @@ class MumbleClient:
             self._audio.volume = self._volume
 
     @property
+    def audio_channels(self) -> int:
+        """Channel count that audio sources must produce (1 or 2)."""
+        return self._audio_settings.channels
+
+    @property
     def audio(self) -> AudioSender | None:
         """The audio sender, once :meth:`play` has been called (bitrate, stats, ...)."""
         return self._audio

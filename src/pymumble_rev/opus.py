@@ -137,7 +137,10 @@ class Encoder:
 
     def _ctl(self, request: int, value: int | None = None) -> None:
         args: list[ctypes.c_int32] = [] if value is None else [ctypes.c_int32(value)]
-        _check(_lib().opus_encoder_ctl(self._require(), ctypes.c_int(request), *args), "ctl")
+        # 可变参数函数没有 argtypes:句柄必须显式包成 c_void_p,否则 ctypes 按 32 位 int 传,
+        # 高地址(线程的 malloc arena 通常在 0x7f...)会被截断成野指针
+        handle = ctypes.c_void_p(self._require())
+        _check(_lib().opus_encoder_ctl(handle, ctypes.c_int(request), *args), "ctl")
 
     def _require(self) -> int:
         if self._handle is None:

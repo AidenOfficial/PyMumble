@@ -108,16 +108,16 @@ import threading
 from pymumble_rev import ClientConfig, ThreadedClient, events
 
 with ThreadedClient("mumble.example.org", ClientConfig(username="dj"), channels=2) as client:
-    buf, done = client.open_stream(capacity=0.5)   # a PcmBuffer that is already playing
+    buf, done = client.open_stream(capacity=0.5)  # a PcmBuffer that is already playing
 
-    def player() -> None:                          # e.g. your existing ffmpeg reader thread
+    def player() -> None:  # e.g. your existing ffmpeg reader thread
         for chunk in pcm_chunks():
-            buf.write(chunk)                       # blocks while 0.5 s is queued
+            buf.write(chunk)  # blocks while 0.5 s is queued
         buf.close()
 
     threading.Thread(target=player, daemon=True).start()
 
-    for event in client.events():                  # blocks; ends when the connection ends
+    for event in client.events():  # blocks; ends when the connection ends
         if isinstance(event, events.TextMessage) and event.message == "!skip":
             buf.clear()
 ```

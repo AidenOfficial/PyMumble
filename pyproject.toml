@@ -1,0 +1,75 @@
+[project]
+name = "pymumble-rev"
+version = "0.1.0.dev0"
+description = "Asyncio Mumble client library for Python — sans-IO protocol core and pull-based Opus audio, built for music and voice bots."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "proto/LICENSE"]
+authors = [{ name = "Aiden Wong" }]
+requires-python = ">=3.12"
+dependencies = [
+    # 生成代码由 protoc 5.29 产出(grpcio-tools 1.70),运行时不能低于它
+    "protobuf>=5.29",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Framework :: AsyncIO",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Communications :: Conferencing",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Typing :: Typed",
+]
+keywords = ["mumble", "voip", "asyncio", "opus", "bot"]
+
+[project.urls]
+Repository = "https://github.com/AidenOfficial/PyMumble"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pymumble_rev"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "proto", "tests", "scripts", "README.md", "README.zh-CN.md", "LICENSE"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "types-protobuf>=5.29",
+]
+# 只有重新生成 _proto 时才需要
+proto = [
+    "grpcio-tools==1.70.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--import-mode=importlib", "-ra"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["src/pymumble_rev/_proto"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+# 中文注释里的全角标点不算可疑字符
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+files = ["src", "tests"]
+exclude = ["src/pymumble_rev/_proto/.*_pb2\\.py$"]
+
+[[tool.mypy.overrides]]
+module = ["pymumble_rev._proto.*"]
+ignore_errors = true

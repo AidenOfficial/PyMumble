@@ -111,3 +111,31 @@ async def test_other_user_leaving_is_reported() -> None:
         await leaver.close()
         left = await asyncio.wait_for(next_event(watcher, events.UserLeft), 5)
         assert isinstance(left, events.UserLeft) and left.actor is None
+
+
+@run
+async def test_played_audio_arrives_decodable() -> None:
+    from pymumble_rev import opus
+    from pymumble_rev.audio import BytesSource
+
+    from .test_opus import rms, tone
+
+    async with (
+        make_client(unique("dj"), channels=1) as dj,
+        make_client(unique("ear"), receive_audio=True) as ear,
+    ):
+        await next_event(ear, events.Connected)
+        src = tone(400, 1, amp=10_000)
+        await dj.play(BytesSource(src))
+
+        dec = opus.Decoder(1)
+        received: list[bytes] = []
+        async with asyncio.timeout(5):
+            async for event in ear.events():
+                if isinstance(event, events.AudioReceived):
+                    assert event.sender_session == dj.state.session
+                    received.append(dec.decode(event.opus_data))
+                    if event.is_terminator:
+                        break
+        assert len(received) == 21  # 20 帧 + 终止帧
+        assert rms(b"".join(received[5:15])) > 0.5 * rms(src)

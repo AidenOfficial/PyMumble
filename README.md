@@ -4,13 +4,13 @@
 
 [简体中文](README.zh-CN.md)
 
-> **Status: pre-alpha.** The sans-IO protocol core and the asyncio client are in place; the audio
-> pipeline is next. The API will change until 0.1.0.
+> **Status: pre-alpha.** Protocol core, asyncio client and the audio pipeline are in place; a
+> blocking wrapper for threaded applications is next. The API will change until 0.1.0.
 
 An asyncio client for the Mumble voice protocol, designed for long-running bots that stream audio.
 
 - **Sans-IO core**: the protocol is a pure state machine (`bytes in → events out`, `commands → bytes out`), testable without sockets.
-- **Pull-based audio** *(planned)*: the client asks your source for the next 20 ms frame, so there is no buffer to poll and skips take effect immediately.
+- **Pull-based audio**: the client asks your source for the next 20 ms frame, so there is no buffer to poll and skips take effect immediately.
 - **Small on purpose**: client only, Opus over the TLS tunnel, Mumble 1.5+. No UDP/OCB2, no ACL editing, no positional audio.
 
 ## Install
@@ -57,6 +57,46 @@ asyncio.run(main())
 - The server certificate is not verified by default, because nearly every Mumble server uses a
   self-signed one. Pass `ssl_context=` to verify it, or
   `default_ssl_context(certfile, keyfile)` to log in with a client certificate.
+
+## Playing audio
+
+The client pulls 20 ms of PCM (s16le, 48 kHz, mono or stereo) from a source every frame, encodes
+it with the system libopus, and paces packets in real time. `PcmBuffer` lets any thread feed it:
+
+```python
+import asyncio, subprocess
+from pymumble_rev import ClientConfig, MumbleClient
+from pymumble_rev.audio import PcmBuffer
+
+
+async def play_file(client: MumbleClient, path: str) -> None:
+    buf = PcmBuffer(channels=2, capacity=0.5)
+
+    def feed() -> None:  # runs in a worker thread
+        cmd = ["ffmpeg", "-v", "error", "-i", path, "-f", "s16le", "-ar", "48000", "-ac", "2", "-"]
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE) as ff:
+            while chunk := ff.stdout.read(3840):
+                buf.write(chunk)  # blocks while 0.5 s is queued: playback paces the reader
+        buf.close()  # play what is queued, then end the transmission
+
+    feeder = asyncio.to_thread(feed)
+    await asyncio.gather(feeder, client.play(buf))
+
+
+async def main() -> None:
+    async with MumbleClient("mumble.example.org", ClientConfig(username="dj"), channels=2) as c:
+        c.volume = 0.6  # applied per frame with a short ramp, so changes are instant and click-free
+        await play_file(c, "song.mp3")
+```
+
+- `play(source)` switches immediately and returns a future that resolves when the source ends,
+  is replaced, or `stop_audio()` is called. `PcmBuffer.clear()` skips what is queued.
+- Short underruns (a slow download) are bridged with silence for 200 ms; longer ones end the
+  transmission cleanly and a new one starts when data returns.
+- The bitrate (default 96 kbit/s) is capped automatically to the server's bandwidth limit,
+  counting the TCP tunnel overhead the server charges per packet.
+- libopus is loaded on the first `play()`; set `PYMUMBLE_REV_LIBOPUS` to point at a specific
+  library file.
 
 ## The sans-IO core
 

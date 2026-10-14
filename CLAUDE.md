@@ -10,6 +10,10 @@ Asyncio Mumble client library. Distribution name `pymumble-rev`, import name `py
 - `MumbleClient` owns exactly one connection and never reconnects; reconnecting is the caller's loop.
   Every write goes through `_flush()` (write + `drain()`), so backpressure suspends the sender rather
   than failing. Liveness is "any byte received within `dead_after`", fed by the ping task.
+- Audio is pull-based: `AudioSender.run()` asks the current `AudioSource` for one frame per period on
+  absolute deadlines, and resyncs instead of bursting after a stall. `AudioSource.read()` must never
+  block (it runs on the loop); threads feed audio through `PcmBuffer`. libopus is bound with ctypes
+  in `opus.py` and loaded lazily on the first `play()`, so text-only users never need it.
 - State is immutable: `User`, `Channel`, `ServerInfo`, `ServerState` are frozen dataclasses. `Connection`
   mutates private dicts while handling one `receive_data` batch and publishes one new `ServerState` at the
   end (only when `_dirty`). Never hand out the private dicts.

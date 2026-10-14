@@ -248,3 +248,64 @@ async def test_close_is_idempotent_and_ends_stream() -> None:
 def test_default_ssl_context_loads_client_certificate() -> None:
     ctx = default_ssl_context(str(DATA / "cert.pem"), str(DATA / "key.pem"))
     assert ctx.verify_mode.name == "CERT_NONE"
+
+
+# —— 音频 ——————————————————————————————————————————————————————————————
+
+
+def tunnelled_audio(server: FakeServer) -> list[udp_pb.Audio]:
+    out = []
+    for msg in server.received:
+        if isinstance(msg, bytes) and msg[:1] == bytes([UdpType.Audio]):
+            audio = udp_pb.Audio()
+            audio.ParseFromString(msg[1:])
+            out.append(audio)
+    return out
+
+
+@run
+async def test_play_streams_paced_opus_to_the_server() -> None:
+    from pymumble_rev.audio import BytesSource
+
+    from .test_opus import tone
+
+    async with FakeServer() as server, client_for(server, channels=2) as client:
+        assert client.audio is None  # 不放音就不加载 libopus
+        await client.play(BytesSource(tone(100, 2)))
+        await asyncio.sleep(0.05)
+        packets = tunnelled_audio(server)
+        assert [p.frame_number for p in packets] == [0, 2, 4, 6, 8, 10]
+        assert [p.is_terminator for p in packets] == [False] * 5 + [True]
+        assert client.audio is not None
+        # 假服务器的 max_bandwidth 是 558000,不会压低默认码率
+        assert client.audio.bitrate == 96_000
+
+
+@run
+async def test_play_requires_a_connection_and_fails_on_drop() -> None:
+    from pymumble_rev.audio import BytesSource, PcmBuffer
+
+    async with FakeServer() as server:
+        client = client_for(server)
+        with pytest.raises(ConnectionClosedError):
+            client.play(BytesSource(b""))
+        await client.connect()
+        playing = client.play(PcmBuffer(1))  # 永不结束的源
+        await server.drop()
+        with pytest.raises(ConnectionClosedError):
+            await asyncio.wait_for(playing, 5)
+
+
+@run
+async def test_bitrate_follows_server_bandwidth_limit() -> None:
+    from pymumble_rev.audio import PcmBuffer
+
+    async with FakeServer() as server, client_for(server, bitrate=128_000) as client:
+        client.play(PcmBuffer(1))
+        assert client.audio is not None and client.audio.bitrate == 128_000
+        await server.send(pb.ServerConfig(max_bandwidth=72_000))
+        # 队列里还有同步阶段的 ServerInfoUpdated,要等到带新限速的那一个
+        async for event in client.events():
+            if isinstance(event, events.ServerInfoUpdated) and event.server.max_bandwidth == 72_000:
+                break
+        assert client.audio.bitrate == 72_000 - 57 * 8 * 50

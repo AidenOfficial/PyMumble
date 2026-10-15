@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import ssl
 from collections.abc import AsyncIterator, Coroutine, Iterable
@@ -11,8 +12,8 @@ from typing import Any, NamedTuple, Self
 
 from . import events as ev
 from .audio import AudioSender, AudioSource
-from .connection import ClientConfig, Connection, Phase
-from .errors import ConnectionClosedError, ConnectionRejected, MumbleError
+from .connection import ClientConfig, Connection, Phase, VoiceTarget
+from .errors import ConnectionClosedError, ConnectionRejected, LocalProtocolError, MumbleError
 from .opus import Application
 from .state import ServerState
 
@@ -244,6 +245,11 @@ class MumbleClient:
         self._conn.set_tokens(tokens)
         await self._flush()
 
+    async def set_voice_target(self, target_id: int, targets: Iterable[VoiceTarget]) -> None:
+        """Register whisper/shout target ``target_id`` (see :meth:`Connection.set_voice_target`)."""
+        self._conn.set_voice_target(target_id, targets)
+        await self._flush()
+
     async def send_audio(
         self, opus_data: bytes, *, frame_number: int, target: int = 0, is_terminator: bool = False
     ) -> None:
@@ -254,12 +260,13 @@ class MumbleClient:
 
     # —— 音频 ——————————————————————————————————————————————————————————
 
-    def play(self, source: AudioSource) -> asyncio.Future[None]:
+    def play(self, source: AudioSource, *, target: int = 0) -> asyncio.Future[None]:
         """Start pulling audio from ``source`` now, replacing whatever was playing.
 
         The returned future resolves when the source ends, is replaced, or is stopped, and
-        fails with :class:`ConnectionClosedError` if the connection drops first. The first call
-        loads libopus.
+        fails with :class:`ConnectionClosedError` if the connection drops first. ``target`` is
+        0 for our channel or a voice target registered with :meth:`set_voice_target`. The first
+        call loads libopus.
         """
         if not self.connected:
             raise ConnectionClosedError(f"not connected ({self._conn.close_reason})")
@@ -274,8 +281,8 @@ class MumbleClient:
             )
             self._audio.volume = self._volume
             self._audio.limit_bandwidth(self.state.server.max_bandwidth)
-            self._spawn(self._audio.run(), "audio")
-        return self._audio.play(source)
+            self._spawn(self._run_audio(self._audio), "audio")
+        return self._audio.play(source, target=target)
 
     def stop_audio(self) -> None:
         """Stop the current source and end the transmission."""
@@ -303,8 +310,17 @@ class MumbleClient:
         """The audio sender, once :meth:`play` has been called (bitrate, stats, ...)."""
         return self._audio
 
-    async def _send_audio_packet(self, packet: bytes, frame_number: int, terminator: bool) -> None:
-        await self.send_audio(packet, frame_number=frame_number, is_terminator=terminator)
+    async def _send_audio_packet(
+        self, packet: bytes, frame_number: int, terminator: bool, target: int
+    ) -> None:
+        await self.send_audio(
+            packet, frame_number=frame_number, target=target, is_terminator=terminator
+        )
+
+    async def _run_audio(self, sender: AudioSender) -> None:
+        # 发包时发现连接已关:run() 的 finally 已经让等待方拿到异常,不再往任务外抛
+        with contextlib.suppress(ConnectionClosedError):
+            await sender.run()
 
     # —— 内部 ——————————————————————————————————————————————————————————
 
@@ -385,11 +401,12 @@ class MumbleClient:
             if idle > self.dead_after:
                 await self._shutdown(f"no data from server for {idle:.0f}s")
                 return
-            self._conn.ping(loop.time())
             try:
+                self._conn.ping(loop.time())
                 # 不等 drain:对端不读时 drain 会一直挂着,这个循环就再也检查不到 dead_after
                 await self._flush(drain=False)
-            except ConnectionClosedError:
+            except LocalProtocolError:
+                # 协议层已关闭(被拒、被踢),关闭流程马上会结束这个任务
                 return
 
     def _shutdown_soon(self, reason: str) -> None:

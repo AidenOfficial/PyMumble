@@ -193,6 +193,32 @@ def test_playback_future_fails_on_disconnect() -> None:
             done.result(timeout=5)
 
 
+def test_volume_can_be_set_before_connecting() -> None:
+    with fake_server() as st:
+        client = client_for(st)
+        client.volume = 0.25
+        assert client.volume == 0.25
+        with client:
+            client.volume = 0.5
+            wait_until(lambda: client.volume == 0.5)
+        client.volume = 0.75  # 关闭后也不抛
+        assert client.volume == 0.75
+
+
+def test_open_stream_with_a_voice_target() -> None:
+    from pymumble_rev import VoiceTarget
+
+    with fake_server() as st, client_for(st) as client:
+        client.set_voice_target(1, [VoiceTarget(sessions=[5])])
+        wait_until(lambda: st.received(pb.VoiceTarget))
+        buf, done = client.open_stream(target=1)
+        buf.write(tone(40, 1))
+        buf.close()
+        done.result(timeout=2)
+        wait_until(lambda: len(st.received(bytes)) == 3)
+        assert st.received(pb.VoiceTarget)[0].id == 1
+
+
 def test_tokens_and_receive_audio_toggle() -> None:
     with fake_server() as st, client_for(st) as client:
         client.set_tokens(["vip"])

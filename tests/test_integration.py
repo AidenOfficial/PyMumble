@@ -14,7 +14,14 @@ from typing import Any
 
 import pytest
 
-from pymumble_rev import ClientConfig, ConnectionRejected, MumbleClient, events
+from pymumble_rev import (
+    VOICE_TARGET_LOOPBACK,
+    ClientConfig,
+    ConnectionRejected,
+    MumbleClient,
+    VoiceTarget,
+    events,
+)
 
 from .test_client import next_event, run
 
@@ -180,6 +187,48 @@ def test_threaded_client_streams_to_a_listener() -> None:
         t.join(5)
         assert len(frames) == 26  # 25 帧 + 终止帧
         assert rms(b"".join(frames[5:20])) > 0.5 * rms(src)
+
+
+@run
+async def test_whisper_target_reaches_only_its_user() -> None:
+    async with (
+        make_client(unique("dj")) as dj,
+        make_client(unique("ear"), receive_audio=True) as ear,
+        make_client(unique("other"), receive_audio=True) as other,
+    ):
+        assert ear.state.session is not None
+        await dj.set_voice_target(1, [VoiceTarget(sessions=[ear.state.session])])
+        await asyncio.sleep(0.2)  # 让服务器先处理完 VoiceTarget
+        for n in range(3):
+            await dj.send_audio(b"\xf8\xff\xfe", frame_number=n * 2, target=1, is_terminator=n == 2)
+        got = await next_event(ear, events.AudioReceived)
+        assert isinstance(got, events.AudioReceived)
+        assert got.sender_session == dj.state.session
+        assert got.context == 2  # 2 = 对单个用户的 whisper
+        # 同频道的第三人收不到
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(next_event(other, events.AudioReceived), 0.5)
+
+
+@run
+async def test_loopback_target_echoes_our_audio() -> None:
+    async with make_client(unique("echo"), receive_audio=True) as me:
+        await next_event(me, events.Connected)
+        await me.send_audio(b"\xf8\xff\xfe", frame_number=0, target=VOICE_TARGET_LOOPBACK)
+        got = await next_event(me, events.AudioReceived)
+        assert isinstance(got, events.AudioReceived)
+        assert got.sender_session == me.state.session
+
+
+@run
+async def test_kick_is_reported_as_close_reason() -> None:
+    # 没有证书时同名重连会把旧连接踢掉:旧连接的关闭原因应说明是被踢,而不是笼统的对端关闭
+    name = unique("kickme")
+    async with make_client(name) as old:
+        await next_event(old, events.Connected)
+        async with make_client(name):
+            reason = await asyncio.wait_for(old.wait_closed(), 5)
+    assert reason is not None and reason.startswith("kicked")
 
 
 @run

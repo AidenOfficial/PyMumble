@@ -105,6 +105,27 @@ class ServerState:
             key=lambda c: (c.position, c.name),
         )
 
+    def find_channel(self, name: str, *, parent: int | None = None) -> Channel | None:
+        """The channel called ``name`` closest to the root (then first in display order).
+
+        Returns ``None`` if there is none. With ``parent`` only direct sub-channels of that
+        channel are considered.
+        """
+        matches = (
+            c
+            for c in self.channels.values()
+            if c.name == name and (parent is None or c.parent == parent)
+        )
+        return min(
+            matches,
+            key=lambda c: (len(self.path(c.channel_id)), c.position, c.channel_id),
+            default=None,
+        )
+
+    def find_user(self, name: str) -> User | None:
+        """The user called ``name`` (names are unique per server), or ``None``."""
+        return next((u for u in self.users.values() if u.name == name), None)
+
     def path(self, channel_id: int) -> list[Channel]:
         """Channels from the root down to ``channel_id`` (inclusive)."""
         chain: list[Channel] = []

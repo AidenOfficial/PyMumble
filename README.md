@@ -4,8 +4,13 @@
 
 [简体中文](README.zh-CN.md)
 
-> **Status: pre-alpha.** Protocol core, asyncio client, audio pipeline and a blocking wrapper for
-> threaded applications are in place. The API will change until 0.1.0.
+[![CI](https://github.com/AidenOfficial/PyMumble/actions/workflows/ci.yml/badge.svg)](https://github.com/AidenOfficial/PyMumble/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/pymumble-rev)](https://pypi.org/project/pymumble-rev/)
+[![Python](https://img.shields.io/pypi/pyversions/pymumble-rev)](https://pypi.org/project/pymumble-rev/)
+
+> **Status: beta.** Every feature in scope is implemented and tested against a real Mumble
+> server in CI. Until 1.0 a minor release may still change the API; such changes are listed in
+> [CHANGELOG.md](CHANGELOG.md).
 
 An asyncio client for the Mumble voice protocol, designed for long-running bots that stream audio.
 
@@ -15,10 +20,11 @@ An asyncio client for the Mumble voice protocol, designed for long-running bots 
 
 ## Install
 
-Requires Python 3.12+.
+Requires Python 3.12+. Audio needs the system libopus (`apt install libopus0`,
+`brew install opus`, ...); text-only bots do not.
 
 ```sh
-pip install "pymumble-rev @ git+https://github.com/AidenOfficial/PyMumble@main"
+pip install pymumble-rev
 ```
 
 ## Quick start
@@ -31,6 +37,8 @@ from pymumble_rev import ClientConfig, MumbleClient, events
 async def main() -> None:
     config = ClientConfig(username="dj-bot", client_type="bot")
     async with MumbleClient("mumble.example.org", config) as client:
+        if music := client.state.find_channel("Music"):
+            await client.move(music.channel_id)
         me = client.state.myself
         await client.send_text(f"hello from {me.name}", channel_ids=[me.channel_id])
 
@@ -48,7 +56,8 @@ asyncio.run(main())
 
 - `client.state` is an immutable snapshot (users, channels, server limits); reading it from another
   thread is safe.
-- `events()` ends when the connection does. The client never reconnects by itself: put
+- `events()` ends when the connection does, and `close_reason` says why (`kicked: ...`,
+  `no data from server for 20s`, ...). The client never reconnects by itself: put
   `async with MumbleClient(...)` in your own retry loop, and each attempt starts from a fresh,
   fully synced state.
 - Commands are coroutines that wait for the socket to drain, so a slow link slows the sender down
@@ -97,6 +106,40 @@ async def main() -> None:
   counting the TCP tunnel overhead the server charges per packet.
 - libopus is loaded on the first `play()`; set `PYMUMBLE_REV_LIBOPUS` to point at a specific
   library file.
+
+### Whisper and shout
+
+Audio normally goes to the channel you are in. A *voice target* sends it to specific users or
+channels instead, wherever you sit:
+
+```python
+from pymumble_rev import VoiceTarget
+
+await client.set_voice_target(1, [VoiceTarget(channel_id=lobby.channel_id, children=True)])
+await client.play(buf, target=1)  # shout into the lobby and its sub-channels
+await client.set_voice_target(2, [VoiceTarget(sessions=[user.session])])
+await client.play(buf, target=2)  # whisper to one user
+```
+
+Target IDs are 1–30; `VOICE_TARGET_LOOPBACK` (31) makes the server echo your own audio back,
+which is handy for testing a pipeline without a second client.
+
+### Receiving audio
+
+With `receive_audio=True`, every tunnelled packet arrives as `events.AudioReceived`. The server
+forwards Opus as is, so decode it per sender with `pymumble_rev.opus.Decoder` (48 kHz s16le):
+
+```python
+from pymumble_rev import opus
+
+decoders: dict[int, opus.Decoder] = {}
+async for event in client.events():
+    if isinstance(event, events.AudioReceived):
+        dec = decoders.setdefault(event.sender_session, opus.Decoder(channels=1))
+        pcm = dec.decode(event.opus_data)  # 20 ms of PCM per packet
+        if event.is_terminator:
+            decoders.pop(event.sender_session)  # the user stopped talking
+```
 
 ## From threaded code
 
@@ -163,6 +206,17 @@ uv run mypy
 
 The protobuf modules in `src/pymumble_rev/_proto` are generated from `proto/*.proto` (taken
 from Mumble v1.5.939) with `uv run --group proto python scripts/gen_proto.py`.
+
+`tests/test_integration.py` runs against a real server when `PYMUMBLE_REV_SERVER=host:port` is
+set (CI starts a `mumble-server` from the Ubuntu repositories); see the module docstring for a
+local setup.
+
+### Releasing
+
+Bump `version` in `pyproject.toml`, run `uv lock`, move the `[Unreleased]` entries in
+`CHANGELOG.md` under the new version, merge, and push a `vX.Y.Z` tag. The Release workflow
+checks that the tag matches, builds, publishes to PyPI via trusted publishing and creates the
+GitHub release from the changelog section.
 
 ## License
 

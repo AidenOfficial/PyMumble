@@ -130,14 +130,18 @@ def test_gain_scales_ramps_and_clips() -> None:
 class Recorder:
     def __init__(self, delay: float = 0.0) -> None:
         self.packets: list[tuple[bytes, int, bool, float]] = []
+        self.targets: list[int] = []
         self.delay = delay
         self.stall_once: float = 0.0
 
-    async def __call__(self, packet: bytes, frame_number: int, terminator: bool) -> None:
+    async def __call__(
+        self, packet: bytes, frame_number: int, terminator: bool, target: int
+    ) -> None:
         if self.stall_once:
             stall, self.stall_once = self.stall_once, 0.0
             await asyncio.sleep(stall)
         self.packets.append((packet, frame_number, terminator, time.monotonic()))
+        self.targets.append(target)
 
     @property
     def numbers(self) -> list[int]:
@@ -280,6 +284,38 @@ async def test_volume_reaches_the_encoded_audio() -> None:
 
     loud, quiet = await loudness(1.0), await loudness(0.1)
     assert quiet < loud * 0.2
+
+
+@run
+async def test_target_is_passed_through_and_validated() -> None:
+    rec = Recorder()
+    sender = AudioSender(rec)
+    task = await start(sender)
+    with pytest.raises(ValueError):
+        sender.play(BytesSource(b""), target=32)
+    await sender.play(BytesSource(tone(40, 1)), target=7)
+    await asyncio.sleep(0.05)
+    await stop(task)
+    assert sender.target == 7
+    assert rec.targets == [7, 7, 7]  # 2 帧 + 终止帧都发往目标 7
+
+
+@run
+async def test_changing_target_mid_stream_ends_the_old_transmission_first() -> None:
+    rec = Recorder()
+    sender = AudioSender(rec)
+    task = await start(sender)
+    sender.play(BytesSource(tone(1000, 1)))  # 目标 0
+    await asyncio.sleep(0.07)
+    sender.play(BytesSource(tone(60, 1)), target=3)  # 发言中途切到目标 3
+    await asyncio.sleep(0.15)
+    await stop(task)
+
+    switch = rec.targets.index(3)
+    assert rec.terminators[switch - 1] is True  # 旧目标以终止帧收尾
+    assert rec.targets[switch - 1] == 0
+    assert rec.numbers[switch] == 0  # 新目标从 0 重新编号
+    assert rec.targets[switch:] == [3] * 4 and rec.terminators[-1] is True
 
 
 @run

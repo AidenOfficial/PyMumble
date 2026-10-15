@@ -67,6 +67,26 @@ class ClientConfig:
             raise TypeError("tokens must be a sequence of strings, not a single string")
 
 
+#: ``target`` value of :meth:`Connection.send_audio` that makes the server echo our own audio
+#: back to us (useful for testing a pipeline without a second client).
+VOICE_TARGET_LOOPBACK = 31
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class VoiceTarget:
+    """One entry of a whisper/shout target (see :meth:`Connection.set_voice_target`).
+
+    Some users (``sessions``) and/or one channel (``channel_id``, optionally restricted to
+    members of ACL group ``group`` and extended to ``links`` / ``children`` of that channel).
+    """
+
+    sessions: Sequence[int] = ()
+    channel_id: int | None = None
+    group: str | None = None
+    links: bool = False
+    children: bool = False
+
+
 class Phase(Enum):
     IDLE = "idle"
     AUTHENTICATING = "authenticating"
@@ -246,6 +266,29 @@ class Connection:
         # 只带 tokens 的 Authenticate:服务器把它当作令牌更新,不是重新登录
         self._send(pb.Authenticate(tokens=tokens))
 
+    def set_voice_target(self, target_id: int, targets: Iterable[VoiceTarget]) -> None:
+        """Register (or replace) whisper/shout target ``target_id`` (1–30).
+
+        Audio sent with ``target=target_id`` then goes to those users and channels instead of
+        the channel we are in. Pass no ``targets`` to remove the target again.
+        """
+        self._require(Phase.CONNECTED)
+        if not 1 <= target_id <= 30:
+            raise ValueError("voice target IDs are 1 to 30")
+        msg = pb.VoiceTarget(id=target_id)
+        for target in targets:
+            entry = msg.targets.add()
+            entry.session.extend(target.sessions)
+            if target.channel_id is not None:
+                entry.channel_id = target.channel_id
+            if target.group is not None:
+                entry.group = target.group
+            if target.links:
+                entry.links = True
+            if target.children:
+                entry.children = True
+        self._send(msg)
+
     def send_audio(
         self,
         opus_data: bytes,
@@ -257,7 +300,9 @@ class Connection:
         """Queue one Opus packet, tunnelled over the control channel.
 
         ``frame_number`` counts 10 ms units since the start of the transmission, so a stream of
-        20 ms packets goes 0, 2, 4, ... Set ``is_terminator`` on the last packet.
+        20 ms packets goes 0, 2, 4, ... Set ``is_terminator`` on the last packet. ``target`` is
+        0 for our channel, a voice target ID from :meth:`set_voice_target`, or
+        :data:`VOICE_TARGET_LOOPBACK`.
         """
         self._require(Phase.CONNECTED)
         audio = udp_pb.Audio(
@@ -348,7 +393,6 @@ class Connection:
         if msg.HasField("welcome_text"):
             updates["welcome_text"] = msg.welcome_text
         self._server = replace(self._server, **updates)  # type: ignore[arg-type]
-        self._dirty = True
         self.phase = Phase.CONNECTED
         out.append(
             ev.Connected(
@@ -384,16 +428,19 @@ class Connection:
         if user is None:
             return
         self._dirty = True
-        if not self._synced:
-            return
-        out.append(
-            ev.UserLeft(
-                user=user,
-                actor=msg.actor if msg.HasField("actor") else None,
-                reason=msg.reason,
-                ban=msg.ban,
+        if self._synced:
+            out.append(
+                ev.UserLeft(
+                    user=user,
+                    actor=msg.actor if msg.HasField("actor") else None,
+                    reason=msg.reason,
+                    ban=msg.ban,
+                )
             )
-        )
+        if msg.session == self._session:
+            # 被踢/被封:服务器随后会关 socket;先把原因记下来,免得只剩 "closed by peer"
+            what = "banned" if msg.ban else "kicked"
+            self._close(f"{what}: {msg.reason}" if msg.reason else what)
 
     def _on_channel_state(self, msg: pb.ChannelState, out: list[ev.Event]) -> None:
         if not msg.HasField("channel_id"):

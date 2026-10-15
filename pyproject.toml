@@ -49,7 +49,7 @@ dev = [
 ]
 # 只有重新生成 _proto 时才需要
 proto = [
-    "grpcio-tools==1.70.0",
+    "grpcio-tools==1.84.0",
 ]
 
 [tool.pytest.ini_options]

@@ -8,6 +8,9 @@ updates:
     directory: /
     schedule:
       interval: monthly
-    # 运行时只依赖 protobuf,下限由生成代码决定(见 pyproject),不让 dependabot 碰
     ignore:
+      # 运行时只依赖 protobuf,下限由生成代码决定(见 pyproject),不让 dependabot 碰
       - dependency-name: protobuf
+      # grpcio-tools 决定 protoc 版本:升级意味着重新生成 _proto 并抬高 protobuf 运行时下限,
+      # 这是手动决定的事(见 scripts/gen_proto.py),bot 一碰 proto-up-to-date 就红
+      - dependency-name: grpcio-tools

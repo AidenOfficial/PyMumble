@@ -1,0 +1,85 @@
+name: Release
+
+# 推送 vX.Y.Z 标签即发布:构建 → 发到 PyPI(trusted publishing,不用 token)→ 建 GitHub Release。
+# PyPI 侧要先在项目设置里添加 trusted publisher:owner AidenOfficial,repo PyMumble,
+# workflow release.yml,environment pypi。
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - name: Tag must match the version in pyproject.toml
+        run: |
+          version="$(uv version --short)"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match pyproject version $version"
+            exit 1
+          fi
+      - run: uv build
+      - run: uvx twine check --strict dist/*
+      - name: Smoke-test the wheel in a clean environment
+        run: |
+          uv venv --python 3.12 "$RUNNER_TEMP/smoke"
+          uv pip install --python "$RUNNER_TEMP/smoke" dist/*.whl
+          "$RUNNER_TEMP/smoke/bin/python" -c "import pymumble_rev; print(pymumble_rev.__version__)"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/pymumble-rev/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: pypi
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - name: Take this version's section from CHANGELOG.md as the release notes
+        run: |
+          awk -v ver="${GITHUB_REF_NAME#v}" '
+            /^## \[/ { if (found) exit; if (index($0, "[" ver "]")) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+            echo "See CHANGELOG.md." > "$RUNNER_TEMP/notes.md"
+          fi
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=()
+          case "$GITHUB_REF_NAME" in *[a-zA-Z]*[0-9]) flags+=(--prerelease) ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}"

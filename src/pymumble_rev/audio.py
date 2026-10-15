@@ -153,7 +153,8 @@ def apply_gain(pcm: bytes, start: float, end: float, channels: int) -> bytes:
     return out.tobytes()
 
 
-SendFn = Callable[[bytes, int, bool], Awaitable[None]]
+#: ``(packet, frame_number, is_terminator, target)`` — what :class:`AudioSender` calls to send.
+SendFn = Callable[[bytes, int, bool, int], Awaitable[None]]
 
 
 class AudioSender:
@@ -193,6 +194,9 @@ class AudioSender:
         self._wake = asyncio.Event()
         self._volume = 1.0
         self._applied_volume = 1.0
+        # 想要的目标,以及当前这次发言实际用的目标(发言中途换目标要先结束再重开)
+        self._target = 0
+        self._active_target = 0
 
         self._talking = False
         self._frame_number = 0
@@ -205,6 +209,11 @@ class AudioSender:
     @property
     def source(self) -> AudioSource | None:
         return self._source
+
+    @property
+    def target(self) -> int:
+        """Voice target of the current source (0 = our channel)."""
+        return self._target
 
     @property
     def volume(self) -> float:
@@ -240,11 +249,17 @@ class AudioSender:
             bitrate = min(bitrate, self._bitrate_cap)
         self._encoder.bitrate = bitrate
 
-    def play(self, source: AudioSource) -> asyncio.Future[None]:
-        """Switch to ``source`` immediately. The future resolves when it ends or is replaced."""
+    def play(self, source: AudioSource, *, target: int = 0) -> asyncio.Future[None]:
+        """Switch to ``source`` immediately. The future resolves when it ends or is replaced.
+
+        ``target`` is 0 for our channel, a registered voice target ID (1–30) or 31 (loopback).
+        """
+        if not 0 <= target <= 31:
+            raise ValueError("target must be 0 (channel), 1-30 (voice target) or 31 (loopback)")
         self._finish_current()
         loop = asyncio.get_running_loop()
         self._source = source
+        self._target = target
         self._done = loop.create_future()
         self._wake.set()
         return self._done
@@ -292,6 +307,10 @@ class AudioSender:
             self._encoder.close()
 
     async def _tick(self) -> None:
+        if self._talking and self._target != self._active_target:
+            # 新音源的目标不同:先用旧目标结束上一段发言,下一帧再向新目标重新开始
+            await self._emit(self._silence, terminator=True)
+            return
         source = self._source
         pcm = source.read(self.frame_size) if source is not None else None
 
@@ -324,8 +343,10 @@ class AudioSender:
         await self._emit(pcm, terminator=False)
 
     async def _emit(self, pcm: bytes, *, terminator: bool) -> None:
+        if not self._talking:
+            self._active_target = self._target
         packet = self._encoder.encode(pcm)
-        await self._send(packet, self._frame_number, terminator)
+        await self._send(packet, self._frame_number, terminator, self._active_target)
         self.stats["frames"] += 1
         if terminator:
             # 下一次发言从 0 重新计数,编码器状态也清掉,避免把上一段的尾巴带过去

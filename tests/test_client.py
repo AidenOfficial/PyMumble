@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from pymumble_rev import ClientConfig, events
+from pymumble_rev import ClientConfig, VoiceTarget, events
 from pymumble_rev.client import MumbleClient, default_ssl_context
 from pymumble_rev.errors import ConnectionClosedError, ConnectionRejected, MumbleError
 from pymumble_rev.messages import TcpType, UdpType, pb, udp_pb
@@ -279,6 +279,30 @@ async def test_play_streams_paced_opus_to_the_server() -> None:
         assert client.audio is not None
         # 假服务器的 max_bandwidth 是 558000,不会压低默认码率
         assert client.audio.bitrate == 96_000
+
+
+@run
+async def test_voice_target_is_registered_and_used_by_play() -> None:
+    from pymumble_rev.audio import BytesSource
+
+    from .test_opus import tone
+
+    async with FakeServer() as server, client_for(server) as client:
+        await client.set_voice_target(4, [VoiceTarget(sessions=[5])])
+        registered = await server.wait_for(pb.VoiceTarget)
+        assert isinstance(registered, pb.VoiceTarget) and registered.id == 4
+        await client.play(BytesSource(tone(40, 1)), target=4)
+        await asyncio.sleep(0.05)
+        assert {p.target for p in tunnelled_audio(server)} == {4}
+
+
+@run
+async def test_ping_loop_exits_quietly_once_the_protocol_is_closed() -> None:
+    # 回归:协议层先于传输层关闭(被拒、被踢)时,ping 循环曾在 ping() 上抛 ConnectionClosedError,
+    # 留下一个没人接收异常的任务
+    async with FakeServer() as server, client_for(server, ping_interval=0.01) as client:
+        client._conn.close("kicked")
+        await asyncio.wait_for(client._ping_loop(), 1)
 
 
 @run

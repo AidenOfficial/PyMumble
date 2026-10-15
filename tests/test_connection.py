@@ -9,6 +9,7 @@ from pymumble_rev import (
     LocalProtocolError,
     Phase,
     ProtocolError,
+    VoiceTarget,
     events,
 )
 from pymumble_rev.connection import encode_version
@@ -114,6 +115,31 @@ def test_eof_closes() -> None:
     assert conn.phase is Phase.CLOSED
     with pytest.raises(LocalProtocolError):
         conn.send_text("hi", channel_ids=[0])
+
+
+def test_being_kicked_closes_with_the_reason() -> None:
+    conn, _ = connected()
+    evs = conn.receive_data(
+        frame(
+            pb.UserRemove(session=OWN_SESSION, actor=5, reason="spam"),
+            pb.TextMessage(message="never seen", channel_id=[0]),
+        )
+    )
+    assert len(evs) == 1 and isinstance(evs[0], events.UserLeft)
+    assert evs[0].user.session == OWN_SESSION
+    assert conn.phase is Phase.CLOSED
+    assert conn.close_reason == "kicked: spam"
+    assert OWN_SESSION not in conn.state.users
+
+
+def test_being_banned_without_reason() -> None:
+    conn, _ = connected()
+    conn.receive_data(frame(pb.UserRemove(session=OWN_SESSION, ban=True)))
+    assert conn.close_reason == "banned"
+    # 别人被踢不影响我们
+    conn2, _ = connected()
+    conn2.receive_data(frame(pb.UserRemove(session=5, ban=True)))
+    assert conn2.phase is Phase.CONNECTED
 
 
 def test_local_close_is_idempotent_and_blocks_commands() -> None:
@@ -237,6 +263,23 @@ def test_tree_helpers() -> None:
     assert [c.name for c in state.children(0)] == ["AFK", "Music"]
     assert [u.name for u in state.users_in(1)] == ["alice"]
     assert state.path(99) == []
+
+
+def test_find_channel_and_user() -> None:
+    conn, _ = connected()
+    conn.receive_data(
+        frame(
+            pb.ChannelState(channel_id=3, parent=1, name="AFK", position=5),
+            pb.ChannelState(channel_id=4, parent=1, name="AFK", position=-1),
+        )
+    )
+    state = conn.state
+    assert state.find_channel("Music") is state.channels[1]
+    assert state.find_channel("AFK") is state.channels[2]  # 离根最近的那个
+    assert state.find_channel("AFK", parent=1) is state.channels[4]  # position=-1
+    assert state.find_channel("nope") is None
+    assert state.find_user("alice") is state.users[5]
+    assert state.find_user("bob") is None
 
 
 def test_path_survives_parent_cycle() -> None:
@@ -403,6 +446,34 @@ def test_corrupt_stream_raises() -> None:
     conn, _ = connected()
     with pytest.raises(ProtocolError):
         conn.receive_data(HEADER.pack(TcpType.UserState, 0xFFFFFFFF))
+
+
+def test_set_voice_target_encodes_targets() -> None:
+    conn, _ = connected()
+    conn.set_voice_target(
+        2,
+        [
+            VoiceTarget(sessions=[5, 7]),
+            VoiceTarget(channel_id=1, group="admin", links=True, children=True),
+        ],
+    )
+    conn.set_voice_target(2, [])  # 清除
+    registered, cleared = decode_sent(conn.data_to_send())
+    assert isinstance(registered, pb.VoiceTarget) and registered.id == 2
+    users, channel = registered.targets
+    assert list(users.session) == [5, 7] and not users.HasField("channel_id")
+    assert (channel.channel_id, channel.group, channel.links, channel.children) == (
+        1,
+        "admin",
+        True,
+        True,
+    )
+    assert not channel.session
+    assert isinstance(cleared, pb.VoiceTarget) and list(cleared.targets) == []
+    with pytest.raises(ValueError):
+        conn.set_voice_target(31, [])
+    with pytest.raises(ValueError):
+        conn.set_voice_target(0, [])
 
 
 def test_set_tokens_sends_token_only_authenticate() -> None:

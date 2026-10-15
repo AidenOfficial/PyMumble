@@ -19,7 +19,7 @@ from typing import Any, Self, TypeVar
 from . import events as ev
 from .audio import AudioSender, AudioSource, PcmBuffer
 from .client import MumbleClient
-from .connection import ClientConfig
+from .connection import ClientConfig, VoiceTarget
 from .errors import ConnectionClosedError, MumbleError
 from .state import ServerState
 
@@ -83,7 +83,8 @@ class ThreadedClient:
                     pending = asyncio.all_tasks(loop)
                     for task in pending:
                         task.cancel()
-                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                    if pending:
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
                     loop.run_until_complete(loop.shutdown_asyncgens())
                     loop.close()
 
@@ -250,9 +251,13 @@ class ThreadedClient:
         """Replace the channel access tokens (see :meth:`Connection.set_tokens`)."""
         self._command(self._client.set_tokens(list(tokens)))
 
+    def set_voice_target(self, target_id: int, targets: Iterable[VoiceTarget]) -> None:
+        """Register a whisper/shout target (see :meth:`Connection.set_voice_target`)."""
+        self._command(self._client.set_voice_target(target_id, list(targets)))
+
     # —— 音频 ——————————————————————————————————————————————————————————
 
-    def play(self, source: AudioSource) -> concurrent.futures.Future[None]:
+    def play(self, source: AudioSource, *, target: int = 0) -> concurrent.futures.Future[None]:
         """Switch to ``source`` and return once the switch has happened.
 
         The returned future completes when the source ends, is replaced or stopped, and fails
@@ -271,13 +276,13 @@ class ThreadedClient:
 
         async def start() -> None:
             # 在循环线程里同步完成切换:返回之后再调 stop_audio()/volume 一定排在它后面
-            self._client.play(source).add_done_callback(relay)
+            self._client.play(source, target=target).add_done_callback(relay)
 
         self._command(start())
         return outer
 
     def open_stream(
-        self, capacity: float = 0.5
+        self, capacity: float = 0.5, *, target: int = 0
     ) -> tuple[PcmBuffer, concurrent.futures.Future[None]]:
         """Start playing a new :class:`PcmBuffer` and return it with its completion future.
 
@@ -285,7 +290,7 @@ class ThreadedClient:
         seconds are queued), ``buffer.clear()`` to skip, and ``buffer.close()`` at the end.
         """
         buffer = PcmBuffer(self._client.audio_channels, capacity)
-        return buffer, self.play(buffer)
+        return buffer, self.play(buffer, target=target)
 
     def stop_audio(self) -> None:
         self._require_loop().call_soon_threadsafe(self._client.stop_audio)
@@ -299,7 +304,13 @@ class ThreadedClient:
         def apply() -> None:
             self._client.volume = value
 
-        self._require_loop().call_soon_threadsafe(apply)
+        try:
+            loop = self._require_loop()
+        except ConnectionClosedError:
+            # 循环没在跑(还没连接或已关闭)就没有并发的音频任务,直接设即可
+            apply()
+            return
+        loop.call_soon_threadsafe(apply)
 
     @property
     def receive_audio(self) -> bool:

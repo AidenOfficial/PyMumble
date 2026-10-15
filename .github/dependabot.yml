@@ -1,0 +1,13 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: monthly
+    # 运行时只依赖 protobuf,下限由生成代码决定(见 pyproject),不让 dependabot 碰
+    ignore:
+      - dependency-name: protobuf

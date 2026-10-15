@@ -42,3 +42,10 @@ libraries that register `Mumble.proto` in the default descriptor pool. Never edi
 - Python 3.12+, `ruff` (line length 100), `mypy --strict`.
 - Commands: `uv sync --group dev`, `uv run pytest`, `uv run ruff check`, `uv run ruff format --check`,
   `uv run mypy`.
+
+## Releasing
+
+Bump `version` in `pyproject.toml`, run `uv lock`, move the `[Unreleased]` items in `CHANGELOG.md`
+under the new version with today's date, merge to `main`, then push a `vX.Y.Z` tag. The Release
+workflow builds, publishes to PyPI (trusted publishing, no tokens) and creates the GitHub release
+from the changelog section. Before 1.0, breaking changes go in a minor bump and under *Changed*.

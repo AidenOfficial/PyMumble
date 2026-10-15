@@ -4,7 +4,11 @@
 
 [English](README.md)
 
-> **状态:pre-alpha。** 协议核心、asyncio 客户端、音频管线和给多线程程序用的阻塞式封装都已完成。0.1.0 之前 API 会变。
+[![CI](https://github.com/AidenOfficial/PyMumble/actions/workflows/ci.yml/badge.svg)](https://github.com/AidenOfficial/PyMumble/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/pymumble-rev)](https://pypi.org/project/pymumble-rev/)
+
+> **状态:beta。** 范围内的功能全部实现,CI 里对着真实 Mumble 服务器测试。1.0 之前次版本号升级仍可能改 API,
+> 变更都记在 [CHANGELOG.md](CHANGELOG.md)。
 
 - **sans-IO 核心**:协议是纯状态机(`字节进 → 事件出`、`命令 → 字节出`),不用 socket 就能测试。
 - **拉模式音频**:客户端每 20 ms 向你的音源要下一帧,不用轮询缓冲区,切歌立即生效。
@@ -12,10 +16,10 @@
 
 ## 安装
 
-需要 Python 3.12+。
+需要 Python 3.12+。放音频需要系统的 libopus(`apt install libopus0`、`brew install opus` 等),纯文字 bot 不需要。
 
 ```sh
-pip install "pymumble-rev @ git+https://github.com/AidenOfficial/PyMumble@main"
+pip install pymumble-rev
 ```
 
 用法示例见 [英文 README](README.md#quick-start)。

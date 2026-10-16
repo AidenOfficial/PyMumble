@@ -46,6 +46,8 @@ libraries that register `Mumble.proto` in the default descriptor pool. Never edi
 ## Releasing
 
 Bump `version` in `pyproject.toml`, run `uv lock`, move the `[Unreleased]` items in `CHANGELOG.md`
-under the new version with today's date, merge to `main`, then push a `vX.Y.Z` tag. The Release
-workflow builds, publishes to PyPI (trusted publishing, no tokens) and creates the GitHub release
-from the changelog section. Before 1.0, breaking changes go in a minor bump and under *Changed*.
+under the new version with today's date, and merge to `main`. Then run the Release workflow on
+`main` from the Actions tab (it creates the `vX.Y.Z` tag itself), or push that tag. Cloud sessions
+cannot push tags, so use the Actions button there. The workflow builds, publishes to PyPI (trusted
+publishing, no tokens) and creates the GitHub release from the changelog section. Before 1.0,
+breaking changes go in a minor bump and under *Changed*.

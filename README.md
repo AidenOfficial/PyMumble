@@ -214,9 +214,10 @@ local setup.
 ### Releasing
 
 Bump `version` in `pyproject.toml`, run `uv lock`, move the `[Unreleased]` entries in
-`CHANGELOG.md` under the new version, merge, and push a `vX.Y.Z` tag. The Release workflow
-checks that the tag matches, builds, publishes to PyPI via trusted publishing and creates the
-GitHub release from the changelog section.
+`CHANGELOG.md` under the new version, and merge. Then either run the **Release** workflow on
+`main` from the Actions tab, or push a `vX.Y.Z` tag. The workflow checks the version, builds,
+publishes to PyPI via trusted publishing and creates the GitHub release (and, when run by hand,
+the tag) from the changelog section.
 
 ## License
 

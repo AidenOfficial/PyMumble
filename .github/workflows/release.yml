@@ -1,30 +1,60 @@
 name: Release
 
-# 推送 vX.Y.Z 标签即发布:构建 → 发到 PyPI(trusted publishing,不用 token)→ 建 GitHub Release。
+# 两种触发方式,结果相同:构建 → 发到 PyPI(trusted publishing,不用 token)→ 建 GitHub Release。
+#
+# - 在 Actions 页面对 main 点 "Run workflow":版本取自 pyproject.toml,标签 vX.Y.Z 由最后一步
+#   建 Release 时打在本次运行的提交上。PyPI 发布失败就不会留下标签。
+# - 推送 vX.Y.Z 标签:标签必须和 pyproject.toml 的版本一致。
+#
+# 用 GITHUB_TOKEN 建的标签不会再触发本工作流,所以手动触发不会重复发布。
 # PyPI 侧要先在项目设置里添加 trusted publisher:owner AidenOfficial,repo PyMumble,
 # workflow release.yml,environment pypi。
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+# 同一时间只跑一次发布,后来的排队而不是取消正在发的那次
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
-      - name: Tag must match the version in pyproject.toml
+      - name: Decide the tag from the version in pyproject.toml
+        id: tag
         run: |
-          version="$(uv version --short)"
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match pyproject version $version"
-            exit 1
-          fi
+          tag="v$(uv version --short)"
+          case "$GITHUB_EVENT_NAME" in
+            push)
+              if [ "$GITHUB_REF_NAME" != "$tag" ]; then
+                echo "::error::tag $GITHUB_REF_NAME does not match pyproject version ($tag)"
+                exit 1
+              fi
+              ;;
+            workflow_dispatch)
+              if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+                echo "::error::run the release from main, not $GITHUB_REF"
+                exit 1
+              fi
+              if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+                echo "::error::$tag already exists; bump the version in pyproject.toml first"
+                exit 1
+              fi
+              ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - run: uv build
       - run: uvx twine check --strict dist/*
       - name: Smoke-test the wheel in a clean environment
@@ -55,11 +85,15 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
 
   github-release:
-    needs: pypi
+    needs: [build, pypi]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
+    env:
+      TAG: ${{ needs.build.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -68,18 +102,23 @@ jobs:
           path: dist/
       - name: Take this version's section from CHANGELOG.md as the release notes
         run: |
-          awk -v ver="${GITHUB_REF_NAME#v}" '
+          awk -v ver="${TAG#v}" '
             /^## \[/ { if (found) exit; if (index($0, "[" ver "]")) { found = 1; next } }
             found { print }
           ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
           if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
             echo "See CHANGELOG.md." > "$RUNNER_TEMP/notes.md"
           fi
-      - name: Create the GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Create the GitHub release (and the tag, when run by hand)
         run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # 重跑这一步时 Release 已经在了:只补齐文件
+            gh release upload "$TAG" dist/* --clobber
+            exit 0
+          fi
           flags=()
-          case "$GITHUB_REF_NAME" in *[a-zA-Z]*[0-9]) flags+=(--prerelease) ;; esac
-          gh release create "$GITHUB_REF_NAME" dist/* \
-            --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}"
+          # 去掉前缀 v 再看:版本号里还有字母(rc1、b2、a1)才算预发布
+          case "${TAG#v}" in *[a-zA-Z]*) flags+=(--prerelease) ;; esac
+          # 标签不存在时(手动触发),gh 会在 --target 指定的提交上创建它;已存在时忽略 --target
+          gh release create "$TAG" dist/* --target "$GITHUB_SHA" \
+            --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}"
